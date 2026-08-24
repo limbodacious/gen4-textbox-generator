@@ -385,7 +385,7 @@ const BITMAP_FONT = {
     '\ue027': {w:6, adv:6, rows:["000000","000000","001212","001212","012120","012120","121200","121200","012120","012120","001212","001212","000222","000000","000000","000000"]},
     '\ue028': {w:6, adv:4, rows:["000000","000000","001200","011120","121212","201222","011100","122212","120012","120012","011122","022220","000000","000000","000000","000000"]},
     '\u2640': {w:6, adv:6, rows:["000000","000000","011120","122212","120012","120012","211122","021220","111112","221222","001200","002200","000000","000000","000000","000000"]},
-    '-': {w:6, adv:6, rows:["000000","000000","000000","000000","000000","000000","111112","222222","000000","000000","000000","000000","000000","000000","000000","000000"]},
+    '-': {w:6, adv:6, rows:["000000","000000","000000","000000","000000","000000","000000","111112","222222","000000","000000","000000","000000","000000","000000","000000"]},
     '\ue029': {w:6, adv:6, rows:["000000","001200","111112","221222","012120","012120","022220","000000","000000","000000","000000","000000","000000","000000","000000","000000"]},
     '#': {w:6, adv:6, rows:["000000","000000","000000","012120","012120","111112","212122","012120","111112","212122","012120","022220","000000","000000","000000","000000"]},
     '\ue02a': {w:6, adv:6, rows:["000000","000000","000000","000000","000000","000000","000000","111112","222222","000000","111112","222222","000000","000000","000000","000000"]},
@@ -438,6 +438,32 @@ const BOXES = [
   { file: "type19.png", label: "Type 19", w: 250, h: 44 },
   { file: "type20.png", label: "Type 20", w: 246, h: 42 },
 ];
+
+// Arrow colors: { leftColor, rightColor } for each box type
+const ARROW_COLORS = {
+  "type1.png": { left: "#FBFBFB", right: "#413020" },
+  "type2.png": { left: "#FBFBFB", right: "#414141" },
+  "type3.png": { left: "#FBFBFB", right: "#383869" },
+  "type4.png": { left: "#FBFBFB", right: "#593028" },
+  "type5.png": { left: "#FBFBFB", right: "#384920" },
+  "type6.png": { left: "#FBFBFB", right: "#515959" },
+  "type7.png": { left: "#FBFBFB", right: "#515959" },
+  "type8.png": { left: "#FBFBFB", right: "#515959" },
+  "type9.png": { left: "#FBFBFB", right: "#515959" },
+  "type10.png": { left: "#FBFBFB", right: "#515959" },
+  "type11.png": { left: "#FBFBFB", right: "#515959" },
+  "type12.png": { left: "#FBFBFB", right: "#202020" },
+  "type13.png": { left: "#FBFBFB", right: "#515959" },
+  "type14.png": { left: "#FBFBFB", right: "#515959" },
+  "type15.png": { left: "#283028", right: "#515959" },
+  "type16.png": { left: "#FBFBFB", right: "#515959" },
+  "type17.png": { left: "#FBFBFB", right: "#515959" },
+  "type18.png": { left: "#283028", right: "#717979" },
+  "type19.png": { left: "#FBFBFB", right: "#515959" },
+  "type20.png": { left: "#595959", right: "#303028" },
+};
+
+const ARROW_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAkAAAAJCAMAAADXT/YiAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJUExURSgwKHF5eQAAAOFeXjEAAAADdFJOU///ANfKDUEAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAZdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMTITAUd0AAAAuGVYSWZJSSoACAAAAAUAGgEFAAEAAABKAAAAGwEFAAEAAABSAAAAKAEDAAEAAAACAAAAMQECABEAAABaAAAAaYcEAAEAAABsAAAAAAAAAGAAAAABAAAAYAAAAAEAAABQYWludC5ORVQgNS4xLjEyAAADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlgAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADZp5qVybcLXwAAACdJREFUGFdFyMEJAAAMwkDN/kMXS6U+5Ih0o5BrvxBLv4jYVOUBkhgIOgBHANwtTwAAAABJRU5ErkJggg==";
 
 // Box art inlined as base64 data URIs so the main canvas never draws a
 // file://-origin <img>. Chromium (including Brave) taints a canvas that has
@@ -511,6 +537,7 @@ const customOutlineHex = document.getElementById("customOutlineHex");
 const downloadBtn = document.getElementById("downloadBtn");
 const systemMessageToggle = document.getElementById("systemMessageToggle");
 const tallTextToggle = document.getElementById("tallTextToggle");
+const arrowToggle = document.getElementById("arrowToggle");
 const previewFrame = document.querySelector(".preview-frame");
 
 let selectedIndex = 0;
@@ -866,6 +893,60 @@ function hitTest(mx, my) {
   return best === -1 ? lastPositions.length - 1 : best;
 }
 
+async function renderArrow(targetCtx, box) {
+  if (!arrowToggle.checked) return;
+
+  const arrowColors = ARROW_COLORS[box.file];
+  if (!arrowColors) return;
+
+  const arrowImg = await loadImage(ARROW_IMAGE);
+  if (!arrowImg) return;
+
+  // Create temporary canvas for color replacement
+  const tempCanvas = document.createElement("canvas");
+  tempCanvas.width = arrowImg.width;
+  tempCanvas.height = arrowImg.height;
+  const tempCtx = tempCanvas.getContext("2d");
+  tempCtx.drawImage(arrowImg, 0, 0);
+
+  // Replace colors: left (#283028) and right (#717979)
+  const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+  const data = imageData.data;
+
+  const leftRGB = hexToRgb(arrowColors.left);
+  const rightRGB = hexToRgb(arrowColors.right);
+  const oldLeftRGB = { r: 0x28, g: 0x30, b: 0x28 };
+  const oldRightRGB = { r: 0x71, g: 0x79, b: 0x79 };
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    if (r === oldLeftRGB.r && g === oldLeftRGB.g && b === oldLeftRGB.b) {
+      data[i] = leftRGB.r;
+      data[i + 1] = leftRGB.g;
+      data[i + 2] = leftRGB.b;
+    } else if (r === oldRightRGB.r && g === oldRightRGB.g && b === oldRightRGB.b) {
+      data[i] = rightRGB.r;
+      data[i + 1] = rightRGB.g;
+      data[i + 2] = rightRGB.b;
+    }
+  }
+
+  tempCtx.putImageData(imageData, 0, 0);
+  targetCtx.drawImage(tempCanvas, 241, 28);
+}
+
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 0, g: 0, b: 0 };
+}
+
 async function render() {
   const box = BOXES[selectedIndex];
   const img = await loadImage(BOX_IMAGE_DATA[box.file]);
@@ -882,14 +963,15 @@ async function render() {
   ctx.drawImage(img, offsetX, offsetY);
 
   // Adjust TEXT_X based on box type and system message setting
-  if (box.file === "type17.png") {
-    TEXT_X = systemMessageToggle.checked ? 20 : 17;
+  if (box.file === "type17.png" || box.file === "type13.png" || box.file === "type16.png") {
+    TEXT_X = systemMessageToggle.checked ? 21 : 17;
   } else {
-    TEXT_X = systemMessageToggle.checked ? 19 : 16;
+    TEXT_X = systemMessageToggle.checked ? 20 : 16;
   }
 
   const tallText = tallTextToggle.checked;
   TEXT_Y = tallText ? 6 : 8;
+  if (box.file === "type15.png") TEXT_Y += 1;
 
   const text = smartQuotes(rawText);
   const positions = layoutText(text, WRAP_WIDTH, tallText);
@@ -916,6 +998,8 @@ async function render() {
     const cursorHeight = tallText ? LINE_HEIGHT * 2 : LINE_HEIGHT;
     ctx.fillRect(Math.round(p.x), p.y, 1, cursorHeight);
   }
+
+  await renderArrow(ctx, box);
 
   applyZoom();
 }
@@ -1196,6 +1280,9 @@ systemMessageToggle.addEventListener("change", () => {
   render();
 });
 tallTextToggle.addEventListener("change", () => {
+  render();
+});
+arrowToggle.addEventListener("change", () => {
   render();
 });
 window.addEventListener("resize", applyZoom);
