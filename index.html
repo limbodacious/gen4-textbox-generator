@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pokémon Gen 4 Textbox Generator</title>
+<meta name="description" content="Generate authentic, pixel-accurate Pokémon Gen 4 dialogue textboxes with 20 box styles ripped from the games.">
+<link rel="icon" href="favicon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <h1>Pokémon Gen 4 Textbox Generator</h1>
+</header>
+
+<main class="layout">
+
+  <section class="panel preview" aria-label="Preview">
+    <div class="preview-frame">
+      <canvas id="canvas" width="256" height="48" tabindex="0" aria-label="Textbox preview -- click to place a cursor and type, drag to select text"></canvas>
+    </div>
+    <p class="preview-hint">Click into the preview and type. Drag to select text, then use the color options below.</p>
+  </section>
+
+  <section class="panel controls" aria-label="Controls">
+
+    <div class="field-group">
+      <span class="field-label">Selected Text Color</span>
+      <div class="color-toolbar">
+        <button type="button" class="btn-small" data-preset="standard">Standard</button>
+        <button type="button" class="btn-small" data-preset="important">Important</button>
+        <button type="button" class="btn-small" data-preset="custom">Custom</button>
+      </div>
+      <div class="color-row custom-color-row" id="customColorRow" hidden>
+        <div class="custom-color-field">
+          <label for="customTextPicker">Text</label>
+          <input type="color" id="customTextPicker" value="#515159">
+          <input type="text" id="customTextHex" class="hex-input" value="#515159" maxlength="7" spellcheck="false">
+        </div>
+        <div class="custom-color-field">
+          <label for="customOutlinePicker">Outline</label>
+          <input type="color" id="customOutlinePicker" value="#A2A2AA">
+          <input type="text" id="customOutlineHex" class="hex-input" value="#A2A2AA" maxlength="7" spellcheck="false">
+        </div>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <span class="field-label">Special Characters</span>
+      <details class="special-chars">
+        <summary class="btn-small">Show ▾</summary>
+        <div id="specialCharGrid" class="special-char-grid"></div>
+      </details>
+    </div>
+
+    <div class="field-group">
+      <span class="field-label">Frame <span id="styleName" class="style-name"></span></span>
+      <div class="style-toggle">
+        <button type="button" id="prevStyle" class="btn-arrow" aria-label="Previous style">&#8592;</button>
+        <div id="styleGrid" class="style-grid" role="listbox" aria-label="Textbox frame"></div>
+        <button type="button" id="nextStyle" class="btn-arrow" aria-label="Next style">&#8594;</button>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label>
+        <input type="checkbox" id="systemMessageToggle">
+        System message (settings, menus, etc.)
+      </label>
+    </div>
+
+    <div class="field-group">
+      <label>
+        <input type="checkbox" id="tallTextToggle">
+        Tall text (2x scale, no line 2)
+      </label>
+    </div>
+
+    <button type="button" id="downloadBtn" class="btn-primary">Download PNG</button>
+
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <p>
+    Font: Pokémon Platinum's own message font, extracted from ROM data via the
+    <a href="https://github.com/pret/pokeplatinum" target="_blank" rel="noopener">pret/pokeplatinum</a> decompilation project.
+  </p>
+  <p>
+    Textbox art ripped by Dragoon. Pokémon and all related assets — including the font and box art above — are trademarks of Nintendo / Game Freak / Creatures Inc.
+    This is an unofficial, non-commercial fan project and is not affiliated with or endorsed by any of them.
+  </p>
+  <p>
+    Made by <a href="https://github.com/limbodacious" target="_blank" rel="noopener">Limbodacious</a> &middot;
+    <a href="https://github.com/limbodacious/gen4-textbox-generator" target="_blank" rel="noopener">Source on GitHub</a>
+  </p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
