@@ -939,7 +939,7 @@ function buildStyleGrid() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "swatch";
-    btn.style.backgroundImage = `url(assets/textboxes/${box.file})`;
+    btn.style.backgroundImage = `url(${BOX_IMAGE_DATA[box.file]})`;
     btn.title = box.label;
     btn.setAttribute("role", "option");
     btn.setAttribute("aria-selected", i === selectedIndex ? "true" : "false");
