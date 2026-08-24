@@ -2,7 +2,7 @@
 
 A pixel-accurate dialogue textbox generator for **Pokémon Gen 4** (Platinum, Diamond/Pearl, and HeartGold/SoulSilver), inspired by [meejle's Emerald textbox generator](https://meejle.github.io/). Pick from 20 authentic box styles ripped from the games, type your text, and download a PNG at the game's exact native resolution.
 
-**Live page:** `https://limbodacious.github.io/gen4-textbox-generator/` (enable GitHub Pages — see below)
+**Live page:** https://limbodacious.github.io/gen4-textbox-generator/
 
 ## Features
 
