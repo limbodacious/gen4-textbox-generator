@@ -918,16 +918,20 @@ async function renderArrow(targetCtx, box) {
   const oldLeftRGB = { r: 0x28, g: 0x30, b: 0x28 };
   const oldRightRGB = { r: 0x71, g: 0x79, b: 0x79 };
 
+  const tolerance = 10;
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
 
-    if (r === oldLeftRGB.r && g === oldLeftRGB.g && b === oldLeftRGB.b) {
+    const isLeft = Math.abs(r - oldLeftRGB.r) <= tolerance && Math.abs(g - oldLeftRGB.g) <= tolerance && Math.abs(b - oldLeftRGB.b) <= tolerance;
+    const isRight = Math.abs(r - oldRightRGB.r) <= tolerance && Math.abs(g - oldRightRGB.g) <= tolerance && Math.abs(b - oldRightRGB.b) <= tolerance;
+
+    if (isLeft) {
       data[i] = leftRGB.r;
       data[i + 1] = leftRGB.g;
       data[i + 2] = leftRGB.b;
-    } else if (r === oldRightRGB.r && g === oldRightRGB.g && b === oldRightRGB.b) {
+    } else if (isRight) {
       data[i] = rightRGB.r;
       data[i + 1] = rightRGB.g;
       data[i + 2] = rightRGB.b;
