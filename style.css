@@ -292,6 +292,13 @@ input[type="color"] {
   overflow: auto;
 }
 
+.canvas-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  min-width: 0; /* lets it shrink properly as a flex child instead of overflowing/scrolling */
+}
+
 #canvas {
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
@@ -302,6 +309,81 @@ input[type="color"] {
 #canvas:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* previewImg mirrors the canvas as a plain <img> so mobile browsers offer
+   their native long-press "Save Image" -- something a <canvas> can't
+   reliably do. Desktop keeps editing directly on the canvas and never
+   sees this element. */
+#previewImg {
+  display: none;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  /* Stop long-press from sometimes starting a text selection instead of
+     offering "Save Image". touch-callout stays enabled on purpose -- that
+     callout IS the save menu. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: default;
+}
+
+/* Hidden on desktop -- mobile gets a normal, fully native, always-visible
+   text field instead of trying to type directly on the preview image. */
+.mobile-text-input {
+  display: none;
+}
+
+.mobile-only { display: none; }
+
+@media (hover: none) and (pointer: coarse) {
+  .panel.preview {
+    padding: 0.75rem;
+  }
+  /* No padding here on mobile -- previewImg and .mobile-text-input both
+     sit directly against .panel.preview's own padding, at the same
+     nesting depth, so they end up exactly the same width. */
+  .preview-frame {
+    padding: 0;
+    overflow: hidden; /* the image is sized to fit exactly -- never scroll it */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .canvas-wrap {
+    display: block;
+    width: 92%;
+    margin: 0 auto;
+  }
+  #canvas {
+    display: none;
+  }
+  #previewImg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .mobile-text-input {
+    display: block;
+    width: 100%;
+    height: 4.5rem; /* two lines at font-size 16px / line-height 1.5, plus padding */
+    margin-bottom: 0.75rem;
+    padding: 0.6rem 0.7rem;
+    background: var(--input-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 16px; /* keeps iOS Safari from auto-zooming the page on focus */
+    line-height: 1.5;
+    font-family: inherit;
+    resize: none;
+  }
+  .desktop-only { display: none; }
+  .mobile-only { display: block; }
+  /* Any text input under 16px triggers iOS Safari's auto-zoom-on-focus --
+     the hex color fields are the only other text inputs in the app. */
+  .hex-input {
+    font-size: 16px;
+  }
 }
 
 .preview-hint {
@@ -327,3 +409,4 @@ input[type="color"] {
 }
 
 .site-footer a:hover { text-decoration: underline; }
+

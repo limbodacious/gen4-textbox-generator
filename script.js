@@ -521,8 +521,12 @@ const COLOR_PRESETS = {
   important: { text: "#EB2010", outline: "#FBAABA" },
 };
 
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Mac/i.test(navigator.userAgent));
+
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const mobileInput = document.getElementById("mobileInput");
+const previewImg = document.getElementById("previewImg");
 const styleGrid = document.getElementById("styleGrid");
 const styleName = document.getElementById("styleName");
 const styleToggle = document.querySelector(".style-toggle");
@@ -554,6 +558,7 @@ let rawText = "Hello there!\nIt's so very nice to meet you!";
 let selStart = rawText.length;
 let selEnd = rawText.length;
 let previousText = rawText;
+let renderGeneration = 0;
 let dragging = false;
 
 // Per-portion text coloring: a sorted, non-overlapping list of
@@ -722,6 +727,57 @@ function commit(newText, newSelStart, newSelEnd) {
   render();
 }
 
+// The single wrap width every measurement must agree on. render(),
+// textFits() and withAutoWrapNewline() all route through this -- when
+// they disagreed, text could be accepted at one width and then wrap (and
+// get dropped) at another.
+function currentWrapWidth() {
+  return systemMessageToggle.checked ? 203 : WRAP_WIDTH;
+}
+
+// Measuring must happen on exactly what render() draws, which is
+// smartQuotes(rawText) -- not the raw text. The straight quote characters
+// have no glyph of their own and fall back to a space advance (4px),
+// while the curly ones they become do have glyphs (5px and 6px). Laying
+// out the raw text therefore under-measures every quote/apostrophe, so a
+// string could pass the fit check and then overflow once actually drawn,
+// silently hiding its last character.
+function measure(text, tallText) {
+  return layoutText(smartQuotes(text), currentWrapWidth(), tallText);
+}
+
+// Whether `text` fits entirely within the display: nothing dropped for
+// running past line 2 (or past line 1 in tall-text mode, which has
+// nowhere else to wrap to).
+function textFits(text) {
+  return !measure(text, tallTextToggle.checked).some((pos) => pos.overflow);
+}
+
+// Converts an automatic (width-based) line wrap into a stored, explicit
+// "\n". Desktop rendering is unaffected -- layoutText already treats an
+// automatic wrap and an explicit "\n" identically -- but this lets the
+// mobile text field's own two literal lines match the rendered textbox
+// 1:1, instead of trying (and failing) to replicate our bitmap font's
+// wrap width using a system font. `cursorIdx` is carried through and
+// adjusted so the caret ends up in the equivalent spot in the new text.
+function withAutoWrapNewline(text, cursorIdx, tallText) {
+  if (text.includes("\n") || tallText) {
+    return { text, cursorIdx };
+  }
+  // smartQuotes is length-preserving, so indices map 1:1 back onto `text`.
+  const positions = measure(text, false);
+  const wrapIdx = positions.findIndex((p) => p.line === 1);
+  if (wrapIdx === -1 || wrapIdx >= text.length) {
+    return { text, cursorIdx };
+  }
+  const dropSpace = text[wrapIdx] === " "; // matches layoutText's own leading-space drop
+  const before = text.slice(0, wrapIdx);
+  const after = dropSpace ? text.slice(wrapIdx + 1) : text.slice(wrapIdx);
+  const newText = before + "\n" + after;
+  const newCursor = cursorIdx >= wrapIdx ? cursorIdx - (dropSpace ? 1 : 0) + 1 : cursorIdx;
+  return { text: newText, cursorIdx: newCursor };
+}
+
 function insertAtSelection(str) {
   let filtered = "";
   for (const ch of str) if (isTypeable(ch)) filtered += ch;
@@ -734,27 +790,15 @@ function insertAtSelection(str) {
   if (room <= 0) return;
   if (filtered.length > room) filtered = filtered.slice(0, room);
 
-  // Truncate if adding text would exceed line 1 width limit
-  const line1Width = systemMessageToggle.checked ? 203 : WRAP_WIDTH;
-  const tallText = tallTextToggle.checked;
-  let testText = before + filtered + after;
-  while (filtered.length > 0) {
-    const positions = layoutText(testText, line1Width, tallText);
-    let exceedsLimit = false;
-    for (const pos of positions) {
-      if (pos.line === 0 && pos.x - TEXT_X > line1Width) {
-        exceedsLimit = true;
-        break;
-      }
-    }
-    if (!exceedsLimit) break;
+  // Trim from the end of the newly-typed/pasted text until it fits.
+  while (filtered.length > 0 && !textFits(before + filtered + after)) {
     filtered = filtered.slice(0, -1);
-    testText = before + filtered + after;
   }
 
   if (!filtered) return;
-  const newText = before + filtered + after;
-  const pos = start + filtered.length;
+  let newText = before + filtered + after;
+  let pos = start + filtered.length;
+  ({ text: newText, cursorIdx: pos } = withAutoWrapNewline(newText, pos, tallTextToggle.checked));
   commit(newText, pos, pos);
 }
 
@@ -791,7 +835,12 @@ function moveCursor(delta, extend) {
 
 function insertSpecialChar(ch) {
   insertAtSelection(ch);
-  canvas.focus();
+  if (IS_MOBILE) {
+    mobileInput.setSelectionRange(selEnd, selEnd);
+    mobileInput.focus();
+  } else {
+    canvas.focus();
+  }
 }
 
 // Computes each character's drawn (x, y, line) position and advance width
@@ -823,7 +872,7 @@ function layoutText(str, maxWidth, tallText = false) {
     }
     if (x - TEXT_X >= maxWidth) {
       if (line !== 0 || tallText) {
-        positions.push({ x, y: TEXT_Y + line * LINE_HEIGHT, line, advance: 0, skip: true });
+        positions.push({ x, y: TEXT_Y + line * LINE_HEIGHT, line, advance: 0, skip: true, overflow: true });
         continue;
       }
       line = 1;
@@ -923,6 +972,9 @@ async function renderArrow(targetCtx, box) {
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
+    const a = data[i + 3];
+
+    if (a < 128) continue; // Skip transparent pixels
 
     const isLeft = Math.abs(r - oldLeftRGB.r) <= tolerance && Math.abs(g - oldLeftRGB.g) <= tolerance && Math.abs(b - oldLeftRGB.b) <= tolerance;
     const isRight = Math.abs(r - oldRightRGB.r) <= tolerance && Math.abs(g - oldRightRGB.g) <= tolerance && Math.abs(b - oldRightRGB.b) <= tolerance;
@@ -952,8 +1004,23 @@ function hexToRgb(hex) {
 }
 
 async function render() {
+  // render() is async (it awaits image loads) but callers never await it,
+  // so fast typing can start a new render before an older one finishes.
+  // Without this guard, an older call can resolve its awaits AFTER a
+  // newer one and clobber the canvas with stale content -- e.g. drawing
+  // over a just-typed trailing character right after it briefly
+  // appeared, which looks exactly like that character "disappearing".
+  // Whichever render() is most recently started is the only one allowed
+  // to actually draw.
+  const myGeneration = ++renderGeneration;
+
+  if (document.activeElement !== mobileInput && mobileInput.value !== rawText) {
+    mobileInput.value = rawText;
+  }
+
   const box = BOXES[selectedIndex];
   const img = await loadImage(BOX_IMAGE_DATA[box.file]);
+  if (myGeneration !== renderGeneration) return; // a newer render has started since
   if (!img) return;
 
   canvas.width = CANVAS_W;
@@ -978,7 +1045,7 @@ async function render() {
   if (box.file === "type15.png") TEXT_Y += 1;
 
   const text = smartQuotes(rawText);
-  const positions = layoutText(text, WRAP_WIDTH, tallText);
+  const positions = layoutText(text, currentWrapWidth(), tallText);
   lastText = text;
   lastPositions = positions;
 
@@ -996,7 +1063,7 @@ async function render() {
 
   drawGlyphs(ctx, text, positions, tallText);
 
-  if (document.activeElement === canvas) {
+  if (!IS_MOBILE && document.activeElement === canvas) {
     const p = positions[selEnd] ?? positions[positions.length - 1];
     ctx.fillStyle = "#000000";
     const cursorHeight = tallText ? LINE_HEIGHT * 2 : LINE_HEIGHT;
@@ -1004,15 +1071,44 @@ async function render() {
   }
 
   await renderArrow(ctx, box);
+  if (myGeneration !== renderGeneration) return; // a newer render has started since
+
+  if (IS_MOBILE) {
+    previewImg.src = mobilePreviewDataUrl();
+  }
 
   applyZoom();
 }
 
+// Relying on the browser to CSS-scale a 256x48 <img> up to phone width is
+// where the blur came from -- image-rendering:pixelated isn't reliable
+// everywhere. Instead we bake the upscale into the exported pixels
+// ourselves with nearest-neighbor (imageSmoothingEnabled = false), so the
+// PNG is already crisp at roughly the size it'll actually be shown.
+const MOBILE_EXPORT_SCALE = 4;
+let mobileExportCanvas = null;
+
+function mobilePreviewDataUrl() {
+  if (!mobileExportCanvas) {
+    mobileExportCanvas = document.createElement("canvas");
+  }
+  mobileExportCanvas.width = CANVAS_W * MOBILE_EXPORT_SCALE;
+  mobileExportCanvas.height = CANVAS_H * MOBILE_EXPORT_SCALE;
+  const exportCtx = mobileExportCanvas.getContext("2d");
+  exportCtx.imageSmoothingEnabled = false;
+  exportCtx.drawImage(canvas, 0, 0, mobileExportCanvas.width, mobileExportCanvas.height);
+  return mobileExportCanvas.toDataURL("image/png");
+}
+
 // Scales the preview up as large as will fit inside the preview frame
 // (integer multiples only, so pixels stay crisp) with no manual zoom control
-// and no cropping -- the whole frame is always visible.
+// and no cropping -- the whole frame is always visible. Mobile shows
+// previewImg instead (sized by plain CSS), so the canvas itself doesn't
+// need this at all there.
 function applyZoom() {
-  const availW = previewFrame.clientWidth - 32; // minus frame padding
+  if (IS_MOBILE) return;
+
+  const availW = previewFrame.clientWidth - 32;
   const availH = previewFrame.clientHeight - 32;
   const maxZoomW = Math.floor(availW / canvas.width);
   const maxZoomH = Math.floor(availH / canvas.height);
@@ -1053,13 +1149,30 @@ function selectStyle(i) {
   render();
 }
 
+// Converts a data: URL to a Blob synchronously (atob-based) rather than
+// via fetch()/canvas.toBlob(), both of which resolve on a later microtask
+// and can fall outside the window mobile Safari still counts as "triggered
+// directly by a user gesture" -- which navigator.share() requires.
+function dataUrlToBlob(dataUrl) {
+  const [header, base64] = dataUrl.split(",");
+  const mime = header.match(/:(.*?);/)[1];
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function clickDownloadLink(dataUrl, filename) {
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 function download() {
   const box = BOXES[selectedIndex];
-  // a data: URL avoids the createObjectURL/revokeObjectURL timing race that
-  // can silently cancel a download in some environments -- fine here since
-  // these PNGs are only a couple KB. This only works if the canvas is
-  // untainted -- see the BOX_IMAGE_DATA comment for why box art is inlined
-  // as base64 instead of loaded as a plain <img>.
   let dataUrl;
   try {
     dataUrl = canvas.toDataURL("image/png");
@@ -1068,13 +1181,28 @@ function download() {
     alert("Download failed (the canvas couldn't be exported). Check the console for details.");
     return;
   }
-  const a = document.createElement("a");
   const safeName = box.label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-  a.href = dataUrl;
-  a.download = `platinum-textbox-${safeName}.png`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const filename = `platinum-textbox-${safeName}.png`;
+
+  // navigator.share requires a secure context (https, or exactly
+  // "localhost") -- it's silently undefined when testing over plain
+  // http://<lan-ip>:port, which is how this gets tested locally. The
+  // `<a download>` fallback is well-supported on current mobile
+  // browsers, unlike a blank popup window, which several browsers (and
+  // this app's own test tooling) handle inconsistently.
+  if (IS_MOBILE && window.isSecureContext && navigator.share) {
+    const file = new File([dataUrlToBlob(dataUrl)], filename, { type: "image/png" });
+    if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: filename }).catch((err) => {
+        if (err.name === "AbortError") return; // user closed the share sheet
+        console.error("Share failed, falling back to a direct download.", err);
+        clickDownloadLink(dataUrl, filename);
+      });
+      return;
+    }
+  }
+
+  clickDownloadLink(dataUrl, filename);
 }
 
 // Characters already reachable from a keyboard directly (or via smartQuotes)
@@ -1235,11 +1363,55 @@ canvas.addEventListener("paste", (e) => {
   insertAtSelection(text);
 });
 
+// --- Mobile text input ---
+// mobileInput is a real, normally-visible <textarea> below the preview
+// image on mobile (see .mobile-text-input in style.css) -- a genuine
+// on-screen field, not an overlay trick. That's what makes backspace
+// hold-to-repeat, native long-press selection, and the OS Copy/Paste
+// bubble all work: typing, deleting, arrow keys, and paste are handled
+// natively by the browser, and we just diff its value/selection against
+// our state after the fact. The display-limit check still applies here,
+// since nothing here goes through insertAtSelection's own version of it.
+mobileInput.addEventListener("input", () => {
+  let newText = mobileInput.value;
+  if (newText === rawText) return;
+  let caret = mobileInput.selectionStart;
+  ({ text: newText, cursorIdx: caret } = withAutoWrapNewline(newText, caret, tallTextToggle.checked));
+
+  if (newText.length > MAX_CHARS || !textFits(newText)) {
+    // Reject the edit -- put the field back the way it was rather than
+    // silently truncating mid-word.
+    mobileInput.value = rawText;
+    mobileInput.setSelectionRange(selStart, selEnd);
+    return;
+  }
+
+  // The transform above may have inserted a "\n" (or dropped a wrapping
+  // space) that the textarea itself doesn't know about yet -- write it
+  // back so the visible field and rawText never drift apart.
+  if (newText !== mobileInput.value) {
+    mobileInput.value = newText;
+    mobileInput.setSelectionRange(caret, caret);
+  }
+  commit(newText, caret, caret);
+});
+
+document.addEventListener("selectionchange", () => {
+  if (document.activeElement !== mobileInput) return;
+  if (mobileInput.selectionStart === selStart && mobileInput.selectionEnd === selEnd) return;
+  selStart = mobileInput.selectionStart;
+  selEnd = mobileInput.selectionEnd;
+  render();
+});
+
 canvas.addEventListener("mousedown", (e) => {
+  if (IS_MOBILE) return; // mobile types in the visible text field below, not by tapping the preview
   canvas.focus();
   const { x, y } = canvasPointFromEvent(e);
   const idx = hitTest(x, y);
   selStart = selEnd = idx;
+  mobileInput.value = rawText;
+  mobileInput.setSelectionRange(idx, idx);
   dragging = true;
   updateColorToolbarForSelection();
   render();
@@ -1290,6 +1462,69 @@ arrowToggle.addEventListener("change", () => {
   render();
 });
 window.addEventListener("resize", applyZoom);
+
+// Belt-and-suspenders: force the mobile/desktop split with JS instead of
+// trusting only the (hover:none)/(pointer:coarse) CSS media query, since
+// some real devices don't match it consistently -- when that happens the
+// mobile field falls back to an unstyled default size, not a wide one.
+// IS_MOBILE (UA-based) is the single source of truth, and sizing is set
+// as inline styles here rather than left to CSS, so it can't silently
+// depend on a media query matching.
+if (IS_MOBILE) {
+  canvas.style.display = "none";
+  // A native long-press "Save Image" on previewImg works too, but OS/browser
+  // support for that gesture varies and isn't something we can verify from
+  // code -- this button (Web Share API, with a fallback for when that's
+  // unavailable) is the guaranteed-working path.
+  downloadBtn.textContent = "Save Image";
+  document.querySelectorAll(".desktop-only").forEach((el) => (el.style.display = "none"));
+  document.querySelectorAll(".mobile-only").forEach((el) => (el.style.display = "block"));
+
+  document.querySelector(".panel.preview").style.padding = "0.75rem";
+  previewFrame.style.padding = "0";
+  previewFrame.style.overflow = "hidden";
+
+  const canvasWrap = document.querySelector(".canvas-wrap");
+  canvasWrap.style.display = "block";
+  canvasWrap.style.width = "92%";
+  canvasWrap.style.margin = "0 auto";
+
+  previewImg.style.display = "block";
+  previewImg.style.width = "100%";
+  previewImg.style.height = "auto";
+  // Long-press must offer "Save Image", never start a text selection.
+  previewImg.style.userSelect = "none";
+  previewImg.style.webkitUserSelect = "none";
+  previewImg.style.webkitTouchCallout = "default";
+  previewFrame.style.userSelect = "none";
+  previewFrame.style.webkitUserSelect = "none";
+
+  Object.assign(mobileInput.style, {
+    display: "block",
+    width: "100%",
+    height: "4.5rem",
+    marginBottom: "0.75rem",
+    padding: "0.6rem 0.7rem",
+    background: "var(--input-bg)",
+    border: "1px solid var(--panel-border)",
+    borderRadius: "6px",
+    color: "var(--text)",
+    fontSize: "16px",
+    lineHeight: "1.5",
+    fontFamily: "inherit",
+    resize: "none",
+    boxSizing: "border-box",
+  });
+
+  // Same iOS-zoom-on-focus issue as mobileInput -- these are the only
+  // other text inputs in the app.
+  document.querySelectorAll(".hex-input").forEach((el) => {
+    el.style.fontSize = "16px";
+  });
+} else {
+  previewImg.style.display = "none";
+  mobileInput.style.display = "none";
+}
 
 buildStyleGrid();
 buildSpecialCharGrid();
