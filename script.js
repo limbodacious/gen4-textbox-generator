@@ -1168,6 +1168,11 @@ async function render() {
     const { text: displayText } = withAutoWrapNewline(rawText, rawText.length, tallTextToggle.checked);
     if (mobileInput.value !== displayText) mobileInput.value = displayText;
   }
+  // Defensive: ensure input isn't empty if there's text to display
+  if (mobileInput && rawText && !mobileInput.value) {
+    const { text: displayText } = withAutoWrapNewline(rawText, rawText.length, tallTextToggle.checked);
+    mobileInput.value = displayText;
+  }
 
   const box = BOXES[selectedIndex];
   const img = await loadImage(BOX_IMAGE_DATA[box.file]);
@@ -1293,11 +1298,16 @@ function updateSelectedSwatch() {
 }
 
 function selectStyle(i) {
+  const inputValueBefore = mobileInput ? mobileInput.value : null;
   selectedIndex = (i + BOXES.length) % BOXES.length;
   updateSelectedSwatch();
   const el = styleGrid.children[selectedIndex];
   if (el) el.scrollIntoView({ block: "nearest", inline: "nearest" });
   render();
+  // Defensive: ensure mobile input isn't cleared when changing frames
+  if (mobileInput && !mobileInput.value && rawText) {
+    mobileInput.value = withAutoWrapNewline(rawText, rawText.length, tallTextToggle.checked).text;
+  }
 }
 
 // Converts a data: URL to a Blob synchronously (atob-based) rather than
