@@ -671,6 +671,9 @@ function mergeAdjacent(segs) {
 // existing ranges that overlap it.
 function applyColorToRange(start, end, text, outline) {
   if (start >= end) return;
+  // Colour edits are undoable too, though they don't touch rawText. A
+  // single drag of a picker coalesces into one undo step.
+  pushHistoryCoalesced(`color:${start}:${end}`);
   const next = [];
   for (const seg of segments) {
     if (seg.end <= start || seg.start >= end) {
@@ -717,7 +720,70 @@ function updateColorToolbarForSelection() {
   customColorRow.hidden = matched !== "custom";
 }
 
+// Undo/redo. Every state-changing edit funnels through commit(), so
+// snapshotting here catches all of them -- typing, deleting, cut, paste,
+// colour changes, and the tall-text truncation. Text and segments are
+// both captured because a colour change alters segments without altering
+// text, and undoing one without the other would desync them.
+const history = { past: [], future: [] };
+const HISTORY_LIMIT = 200;
+
+function snapshot() {
+  return {
+    text: rawText,
+    segments: segments.map((s) => ({ ...s })),
+    selStart,
+    selEnd,
+  };
+}
+
+function restore(state) {
+  rawText = state.text;
+  previousText = state.text;
+  segments = state.segments.map((s) => ({ ...s }));
+  selStart = state.selStart;
+  selEnd = state.selEnd;
+  if (mobileInput) mobileInput.value = state.text;
+  updateColorToolbarForSelection();
+  render();
+}
+
+function pushHistory() {
+  history.past.push(snapshot());
+  if (history.past.length > HISTORY_LIMIT) history.past.shift();
+  history.future.length = 0; // a fresh edit invalidates the redo branch
+}
+
+// Colour pickers fire "input" continuously while dragged, which would
+// otherwise push one history entry per pixel of travel and make Ctrl+Z
+// crawl. Consecutive edits carrying the same tag, less than COALESCE_MS
+// apart, are treated as one gesture and only snapshot once.
+const COALESCE_MS = 600;
+let lastCoalesce = { tag: null, at: 0 };
+
+function pushHistoryCoalesced(tag) {
+  const now = Date.now();
+  const sameGesture = lastCoalesce.tag === tag && now - lastCoalesce.at < COALESCE_MS;
+  lastCoalesce = { tag, at: now };
+  if (sameGesture) return;
+  pushHistory();
+}
+
+function undo() {
+  if (!history.past.length) return;
+  history.future.push(snapshot());
+  restore(history.past.pop());
+}
+
+function redo() {
+  if (!history.future.length) return;
+  history.past.push(snapshot());
+  restore(history.future.pop());
+}
+
 function commit(newText, newSelStart, newSelEnd) {
+  pushHistory();
+  lastCoalesce = { tag: null, at: 0 }; // a text edit ends any colour gesture
   segments = shiftSegments(previousText, newText);
   previousText = newText;
   rawText = newText;
@@ -753,21 +819,30 @@ function textFits(text) {
   return !measure(text, tallTextToggle.checked).some((pos) => pos.overflow);
 }
 
-// Converts an automatic (width-based) line wrap into a stored, explicit
-// "\n". Desktop rendering is unaffected -- layoutText already treats an
-// automatic wrap and an explicit "\n" identically -- but this lets the
-// mobile text field's own two literal lines match the rendered textbox
-// 1:1, instead of trying (and failing) to replicate our bitmap font's
-// wrap width using a system font. `cursorIdx` is carried through and
-// adjusted so the caret ends up in the equivalent spot in the new text.
+// Converts an automatic (width-based) line wrap into an explicit "\n" so
+// the mobile field's two literal lines match the rendered textbox 1:1,
+// instead of trying (and failing) to replicate our bitmap font's wrap
+// width with a system font. Rendering is unaffected -- layoutText treats
+// an automatic wrap and an explicit "\n" identically.
+//
+// This is the *display* form of the text. rawText itself never stores an
+// auto-wrap newline, so this can always be recomputed from scratch: an
+// earlier version bailed out whenever the text already contained any
+// "\n" at all, which meant the default message (which has one) never
+// wrapped, and any inserted wrap froze in place and went stale as soon
+// as line 1 was edited.
 function withAutoWrapNewline(text, cursorIdx, tallText) {
-  if (text.includes("\n") || tallText) {
-    return { text, cursorIdx };
-  }
+  if (tallText) return { text, cursorIdx }; // tall text has no line 2 to wrap into
+
   // smartQuotes is length-preserving, so indices map 1:1 back onto `text`.
   const positions = measure(text, false);
   const wrapIdx = positions.findIndex((p) => p.line === 1);
   if (wrapIdx === -1 || wrapIdx >= text.length) {
+    return { text, cursorIdx };
+  }
+  // An explicit newline already puts that character on line 2; only a
+  // width-driven wrap needs one synthesised.
+  if (text[wrapIdx - 1] === "\n") {
     return { text, cursorIdx };
   }
   const dropSpace = text[wrapIdx] === " "; // matches layoutText's own leading-space drop
@@ -776,6 +851,75 @@ function withAutoWrapNewline(text, cursorIdx, tallText) {
   const newText = before + "\n" + after;
   const newCursor = cursorIdx >= wrapIdx ? cursorIdx - (dropSpace ? 1 : 0) + 1 : cursorIdx;
   return { text: newText, cursorIdx: newCursor };
+}
+
+// iOS keyboards substitute characters behind our back -- predictive text
+// and "smart punctuation" insert non-breaking spaces, and CR/CRLF can
+// arrive from pasted text. Those never match the plain space and "\n"
+// that rawTextFromDisplay compares against, so the inversion below would
+// fail to recognise its own synthesised newline, keep it, and add a
+// second one: three logical lines from two. Normalising first keeps the
+// field's text in the alphabet the rest of this code assumes.
+function normalizeFieldText(text) {
+  // Hard guarantee that the field can never show a third line. The
+  // preview has exactly two, so a second newline is meaningless -- and
+  // worse, layoutText ignores it (there is no line 2 to move to) while
+  // the textarea faithfully renders it as another line. That alone
+  // produces the reported third line, with no overflow for textFits to
+  // reject, whenever an extra newline sneaks into the text. Rather than
+  // relying on the inversion never slipping, extra newlines are simply
+  // impossible from here on.
+  const collapseExtraNewlines = (s) => {
+    const first = s.indexOf("\n");
+    if (first === -1) return s;
+    return s.slice(0, first + 1) + s.slice(first + 1).replace(/\n/g, "");
+  };
+  return collapseExtraNewlines(text.replace(/\r\n?/g, "\n"))
+    // U+00A0 no-break, U+2007 figure, U+202F narrow no-break, U+3000 ideographic
+    .replace(/[   　]/g, " ")
+    .replace(/[​﻿]/g, ""); // zero-width space / BOM
+}
+
+// Inverse of withAutoWrapNewline: recovers the stored text from what the
+// mobile field is showing, by dropping whichever newline (if any) was
+// synthesised rather than typed. A candidate is the right one when
+// re-deriving its display form reproduces the field's value exactly.
+// Where both readings produce the same display they also render the
+// same, so either is safe to pick.
+function rawTextFromDisplay(value, cursorIdx, tallText) {
+  if (tallText) return { text: value, cursorIdx };
+  if (withAutoWrapNewline(value, 0, tallText).text === value) {
+    return { text: value, cursorIdx }; // nothing was synthesised
+  }
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== "\n") continue;
+    const candidate = value.slice(0, i) + value.slice(i + 1);
+    if (withAutoWrapNewline(candidate, 0, tallText).text === value) {
+      return { text: candidate, cursorIdx: cursorIdx > i ? cursorIdx - 1 : cursorIdx };
+    }
+    // The wrap may also have swallowed a space at the break.
+    const withSpace = value.slice(0, i) + " " + value.slice(i + 1);
+    if (withAutoWrapNewline(withSpace, 0, tallText).text === value) {
+      return { text: withSpace, cursorIdx };
+    }
+  }
+  return { text: value, cursorIdx };
+}
+
+// Drops any trailing text that no longer fits the current display mode,
+// so toggling a setting can never strand characters that are still in
+// rawText but render nowhere. A newline is kept only while text after it
+// survives, otherwise a dangling blank line 2 would be left behind.
+function truncateToFit() {
+  if (textFits(rawText)) return;
+  const positions = measure(rawText, tallTextToggle.checked);
+  let fit = 0;
+  for (let i = 0; i < rawText.length; i++) {
+    if (positions[i].overflow) break;
+    if (!positions[i].skip || rawText[i] === "\n") fit = i + 1;
+  }
+  while (fit > 0 && rawText[fit - 1] === "\n") fit--;
+  commit(rawText.slice(0, fit), fit, fit);
 }
 
 function insertAtSelection(str) {
@@ -1017,11 +1161,12 @@ async function render() {
   // to actually draw.
   const myGeneration = ++renderGeneration;
 
-  if (document.activeElement !== mobileInput && mobileInput.value !== rawText) {
-    // Apply withAutoWrapNewline so the mobile field's two literal lines
-    // reflect exactly where the rendered text wraps.
+  if (document.activeElement !== mobileInput) {
+    // The field shows the display form (with the wrap newline), which
+    // legitimately differs from rawText -- compare against that, not
+    // rawText, or this rewrites the field on every single render.
     const { text: displayText } = withAutoWrapNewline(rawText, rawText.length, tallTextToggle.checked);
-    mobileInput.value = displayText;
+    if (mobileInput.value !== displayText) mobileInput.value = displayText;
   }
 
   const box = BOXES[selectedIndex];
@@ -1177,6 +1322,40 @@ function clickDownloadLink(dataUrl, filename) {
   a.remove();
 }
 
+// Opens the PNG on its own tab, where every mobile browser offers its
+// native "save image" on the bare image. Deliberately a blob: URL, not
+// the data: URL used elsewhere -- browsers block data: URLs for
+// top-level navigation, so window.open("data:image/png,...") silently
+// does nothing. The blob is built synchronously (never via the async
+// canvas.toBlob) so the open still counts as part of the tap that
+// triggered it and isn't treated as an unsolicited popup.
+function openImageTab(dataUrl, filename) {
+  const url = URL.createObjectURL(dataUrlToBlob(dataUrl));
+
+  let win = null;
+  try {
+    win = window.open(url, "_blank");
+  } catch (err) {
+    win = null;
+  }
+
+  if (!win) {
+    // A plain anchor click is treated as user navigation and survives
+    // some popup blockers that reject window.open outright.
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // Revoking immediately would kill the tab before it painted; the new
+  // document holds its own reference until then.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 function download() {
   const box = BOXES[selectedIndex];
   let dataUrl;
@@ -1190,22 +1369,14 @@ function download() {
   const safeName = box.label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
   const filename = `platinum-textbox-${safeName}.png`;
 
-  // navigator.share requires a secure context (https, or exactly
-  // "localhost") -- it's silently undefined when testing over plain
-  // http://<lan-ip>:port, which is how this gets tested locally. The
-  // `<a download>` fallback is well-supported on current mobile
-  // browsers, unlike a blank popup window, which several browsers (and
-  // this app's own test tooling) handle inconsistently.
-  if (IS_MOBILE && window.isSecureContext && navigator.share) {
-    const file = new File([dataUrlToBlob(dataUrl)], filename, { type: "image/png" });
-    if (!navigator.canShare || navigator.canShare({ files: [file] })) {
-      navigator.share({ files: [file], title: filename }).catch((err) => {
-        if (err.name === "AbortError") return; // user closed the share sheet
-        console.error("Share failed, falling back to a direct download.", err);
-        clickDownloadLink(dataUrl, filename);
-      });
-      return;
-    }
+  // Mobile always goes to a new tab. The share sheet and `<a download>`
+  // both proved unreliable across real devices, whereas an image on its
+  // own tab is just an image -- every browser can save one. It gets the
+  // nearest-neighbour upscale rather than the raw 256x48, which would
+  // otherwise open as a postage stamp on a phone screen.
+  if (IS_MOBILE) {
+    openImageTab(mobilePreviewDataUrl(), filename);
+    return;
   }
 
   clickDownloadLink(dataUrl, filename);
@@ -1327,19 +1498,21 @@ customOutlineHex.addEventListener("input", () => {
 
 canvas.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey) {
-    if (e.key === "a") {
+    // Holding shift uppercases e.key, so compare against a lowered copy.
+    const key = e.key.toLowerCase();
+    if (key === "a") {
       e.preventDefault();
       selStart = 0;
       selEnd = rawText.length;
       updateColorToolbarForSelection();
       render();
-    } else if (e.key === "c") {
+    } else if (key === "c") {
       e.preventDefault();
       const start = Math.min(selStart, selEnd);
       const end = Math.max(selStart, selEnd);
       const selected = rawText.slice(start, end);
       navigator.clipboard.writeText(selected);
-    } else if (e.key === "x") {
+    } else if (key === "x") {
       e.preventDefault();
       const start = Math.min(selStart, selEnd);
       const end = Math.max(selStart, selEnd);
@@ -1349,6 +1522,13 @@ canvas.addEventListener("keydown", (e) => {
         const newText = rawText.slice(0, start) + rawText.slice(end);
         commit(newText, start, start);
       }
+    } else if (key === "z" && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+    } else if (key === "y" || (key === "z" && e.shiftKey)) {
+      // Ctrl+Y and Ctrl+Shift+Z are both conventional redo bindings.
+      e.preventDefault();
+      redo();
     }
     return; // don't intercept other browser/OS shortcuts
   }
@@ -1389,42 +1569,167 @@ canvas.addEventListener("paste", (e) => {
 // our state after the fact. The display-limit check still applies here,
 // since nothing here goes through insertAtSelection's own version of it.
 if (mobileInput) mobileInput.addEventListener("input", () => {
-  let newText = mobileInput.value;
-  if (newText === rawText) return;
+  const tallText = tallTextToggle.checked;
+  const value = normalizeFieldText(mobileInput.value);
   let caret = mobileInput.selectionStart;
-  ({ text: newText, cursorIdx: caret } = withAutoWrapNewline(newText, caret, tallTextToggle.checked));
+
+  // Strip whatever wrap newline we last synthesised before doing anything
+  // else, so the break is recomputed from the real text on every
+  // keystroke instead of freezing where it first landed.
+  let newText;
+  ({ text: newText, cursorIdx: caret } = rawTextFromDisplay(value, caret, tallText));
+  if (newText === rawText) return;
 
   if (newText.length > MAX_CHARS || !textFits(newText)) {
     // Reject the edit -- put the field back the way it was rather than
     // silently truncating mid-word.
-    mobileInput.value = rawText;
-    mobileInput.setSelectionRange(selStart, selEnd);
+    const restored = withAutoWrapNewline(rawText, selEnd, tallText);
+    mobileInput.value = restored.text;
+    mobileInput.setSelectionRange(restored.cursorIdx, restored.cursorIdx);
     return;
   }
 
-  // The transform above may have inserted a "\n" (or dropped a wrapping
-  // space) that the textarea itself doesn't know about yet -- write it
-  // back so the visible field and rawText never drift apart.
-  if (newText !== mobileInput.value) {
-    mobileInput.value = newText;
-    mobileInput.setSelectionRange(caret, caret);
-  }
   commit(newText, caret, caret);
+
+  // Show the freshly recomputed wrap. Written back only when it actually
+  // differs, so the caret and the browser's own undo stack survive
+  // ordinary typing untouched.
+  const display = withAutoWrapNewline(newText, caret, tallText);
+  if (display.text !== mobileInput.value) {
+    mobileInput.value = display.text;
+    mobileInput.setSelectionRange(display.cursorIdx, display.cursorIdx);
+  }
+  updateWrapDebug();
 });
+
+// Opt-in diagnostic: load the page with #debug to get a live readout
+// under the field. There's no way to open a console on iOS without
+// tethering to a Mac, so if the line-splitting still misbehaves there
+// this is how to see what the browser is actually doing. Completely
+// inert without the hash.
+function updateWrapDebug() {
+  const panel = document.getElementById("wrapDebug");
+  if (!panel) return;
+  const cs = getComputedStyle(mobileInput);
+  const lineH = parseFloat(cs.lineHeight) || 1;
+  const padV = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  const visual = Math.round((mobileInput.scrollHeight - padV) / lineH);
+  const positions = measure(rawText, tallTextToggle.checked);
+  const drawn = ["", ""];
+  for (let i = 0; i < rawText.length; i++) {
+    if (rawText[i] === "\n") continue;
+    if (!positions[i].skip) drawn[positions[i].line] += rawText[i];
+  }
+  const fieldLines = mobileInput.value.split("\n");
+  const match = fieldLines[0] === drawn[0] && (fieldLines[1] || "") === drawn[1];
+  panel.textContent = [
+    `field lines (logical/visual): ${fieldLines.length} / ${visual}`,
+    `white-space: ${cs.whiteSpace}   word-wrap: ${cs.overflowWrap}`,
+    `scrollH/clientH: ${mobileInput.scrollHeight}/${mobileInput.clientHeight}`,
+    `scrollW/clientW: ${mobileInput.scrollWidth}/${mobileInput.clientWidth}`,
+    `newlines in rawText: ${(rawText.match(/\n/g) || []).length}`,
+    `field  L1: ${JSON.stringify(fieldLines[0] || "")}`,
+    `field  L2: ${JSON.stringify(fieldLines[1] || "")}`,
+    `render L1: ${JSON.stringify(drawn[0])}`,
+    `render L2: ${JSON.stringify(drawn[1])}`,
+    `MATCH: ${match ? "yes" : "NO"}`,
+  ].join("\n");
+  panel.style.color = match && visual <= 2 ? "#7ddc7d" : "#ff6b6b";
+}
+
+if (IS_MOBILE && location.hash === "#debug") {
+  const panel = document.createElement("pre");
+  panel.id = "wrapDebug";
+  panel.style.cssText =
+    "white-space:pre-wrap;font:11px/1.35 monospace;background:#0b0b12;color:#7ddc7d;" +
+    "padding:.5rem;margin:.5rem 0 0;border-radius:6px;overflow-x:auto;";
+  mobileInput.insertAdjacentElement("afterend", panel);
+  updateWrapDebug();
+}
 
 document.addEventListener("selectionchange", () => {
   if (document.activeElement !== mobileInput) return;
-  if (mobileInput.selectionStart === selStart && mobileInput.selectionEnd === selEnd) return;
-  selStart = mobileInput.selectionStart;
-  selEnd = mobileInput.selectionEnd;
+  // The field's offsets are display offsets; a synthesised wrap newline
+  // shifts everything after it by one relative to rawText, so map both
+  // ends back before they're used to colour a range.
+  const tallText = tallTextToggle.checked;
+  const value = mobileInput.value;
+  const start = rawTextFromDisplay(value, mobileInput.selectionStart, tallText).cursorIdx;
+  const end = rawTextFromDisplay(value, mobileInput.selectionEnd, tallText).cursorIdx;
+  if (start === selStart && end === selEnd) return;
+  selStart = start;
+  selEnd = end;
   render();
 });
+
+// Word characters for double-click selection: letters, digits and
+// underscore in any script. Everything else (spaces, punctuation) forms
+// its own run, so double-clicking a gap selects the gap rather than
+// jumping to a neighbouring word.
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+// The run of same-kind characters around `idx`, the way a text editor
+// expands a double-click.
+function wordRangeAt(idx) {
+  const text = rawText;
+  if (!text.length) return [0, 0];
+  const i = Math.min(idx, text.length - 1);
+  if (text[i] === "\n") return [i, i + 1];
+
+  const isWord = WORD_CHAR.test(text[i]);
+  const sameKind = (ch) => ch !== "\n" && WORD_CHAR.test(ch) === isWord;
+
+  let start = i;
+  while (start > 0 && sameKind(text[start - 1])) start--;
+  let end = i + 1;
+  while (end < text.length && sameKind(text[end])) end++;
+  return [start, end];
+}
+
+// The paragraph (newline-delimited block) containing `idx`, for
+// triple-click.
+function paragraphRangeAt(idx) {
+  const text = rawText;
+  if (!text.length) return [0, 0];
+  const i = Math.min(idx, Math.max(0, text.length - 1));
+  let start = text.lastIndexOf("\n", i - 1) + 1; // -1 -> 0, which is what we want
+  if (text[i] === "\n") start = text.lastIndexOf("\n", i - 1) + 1;
+  let end = text.indexOf("\n", i);
+  if (end === -1) end = text.length;
+  return [start, end];
+}
+
+function selectRange(start, end) {
+  selStart = start;
+  selEnd = end;
+  dragging = false; // an expanded selection shouldn't turn into a drag
+  mobileInput.value = rawText;
+  mobileInput.setSelectionRange(start, end);
+  updateColorToolbarForSelection();
+  render();
+}
 
 canvas.addEventListener("mousedown", (e) => {
   if (IS_MOBILE) return; // mobile types in the visible text field below, not by tapping the preview
   canvas.focus();
   const { x, y } = canvasPointFromEvent(e);
   const idx = hitTest(x, y);
+
+  // e.detail counts clicks in the current multi-click sequence, which is
+  // how the browser itself distinguishes double from triple clicks.
+  if (e.detail === 2) {
+    const [s, en] = wordRangeAt(idx);
+    selectRange(s, en);
+    e.preventDefault();
+    return;
+  }
+  if (e.detail >= 3) {
+    const [s, en] = paragraphRangeAt(idx);
+    selectRange(s, en);
+    e.preventDefault();
+    return;
+  }
+
   selStart = selEnd = idx;
   mobileInput.value = rawText;
   mobileInput.setSelectionRange(idx, idx);
@@ -1469,29 +1774,30 @@ prevBtn.addEventListener("click", () => selectStyle(selectedIndex - 1));
 nextBtn.addEventListener("click", () => selectStyle(selectedIndex + 1));
 downloadBtn.addEventListener("click", download);
 systemMessageToggle.addEventListener("change", () => {
+  // System messages indent further and wrap narrower, so text that fitted
+  // before can overflow now. Drop whatever no longer fits rather than
+  // leaving invisible characters stranded past the edge.
+  truncateToFit();
   render();
 });
 tallTextToggle.addEventListener("change", () => {
-  // In tall-text mode, text only fits on line 1. If the current text
-  // overflows (including any line 2 content), truncate it to what fits.
-  if (tallTextToggle.checked) {
-    const positions = measure(rawText, true);
-    if (positions.some((p) => p.overflow || p.skip)) {
-      // Find the longest prefix that fits (no overflow, not skipped)
-      let fit = 0;
-      for (let i = 0; i < rawText.length; i++) {
-        if (positions[i].overflow || positions[i].skip) break;
-        fit = i + 1;
-      }
-      commit(rawText.slice(0, fit), fit, fit);
-    }
-  }
+  // Tall text has no line 2, so anything that used to wrap there no
+  // longer has anywhere to go.
+  truncateToFit();
   render();
 });
 arrowToggle.addEventListener("change", () => {
   render();
 });
 window.addEventListener("resize", applyZoom);
+
+// The preview image is inert on mobile: saving goes through the Save
+// Image button, which opens the PNG on its own tab. Long-press handling
+// (both ours and the OS callout) is deliberately gone -- it fired
+// inconsistently and kept stealing the gesture.
+if (IS_MOBILE && previewImg) {
+  previewImg.addEventListener("contextmenu", (e) => e.preventDefault());
+}
 
 // Belt-and-suspenders: force the mobile/desktop split with JS instead of
 // trusting only the (hover:none)/(pointer:coarse) CSS media query, since
@@ -1522,12 +1828,22 @@ if (IS_MOBILE) {
   previewImg.style.display = "block";
   previewImg.style.width = "100%";
   previewImg.style.height = "auto";
-  // Long-press must offer "Save Image", never start a text selection.
-  previewImg.style.userSelect = "none";
-  previewImg.style.webkitUserSelect = "none";
-  previewImg.style.webkitTouchCallout = "default";
-  previewFrame.style.userSelect = "none";
-  previewFrame.style.webkitUserSelect = "none";
+  // Long-press must reach our own handler, never start a text selection
+  // or open the native callout. Enforced inline as well as in CSS since
+  // the media query can't be relied on to match.
+  const previewPanel = document.querySelector(".panel.preview");
+  [previewImg, previewFrame, previewPanel].forEach((el) => {
+    el.style.userSelect = "none";
+    el.style.webkitUserSelect = "none";
+  });
+  previewImg.style.webkitTouchCallout = "none";
+  previewImg.style.webkitTapHighlightColor = "transparent";
+  previewImg.style.touchAction = "manipulation";
+  document.documentElement.style.touchAction = "manipulation";
+  document.body.style.touchAction = "manipulation";
+  // The field itself still needs to be selectable for editing.
+  mobileInput.style.userSelect = "text";
+  mobileInput.style.webkitUserSelect = "text";
 
   Object.assign(mobileInput.style, {
     display: "block",
@@ -1544,7 +1860,22 @@ if (IS_MOBILE) {
     fontFamily: "inherit",
     resize: "none",
     boxSizing: "border-box",
+    // Never soft-wrap: two logical lines must stay two visual lines, or
+    // the system font re-breaks them and a third line appears. WebKit's
+    // UA stylesheet puts `word-wrap: break-word` on textarea, which
+    // survives `white-space: pre`, so every wrapping control is reset.
+    whiteSpace: "pre",
+    overflowWrap: "normal",
+    wordWrap: "normal",
+    wordBreak: "normal",
+    webkitLineBreak: "normal",
+    lineBreak: "normal",
+    hyphens: "none",
+    webkitHyphens: "none",
+    overflowX: "auto",
+    overflowY: "hidden",
   });
+  mobileInput.setAttribute("wrap", "off");
 
   // Same iOS-zoom-on-focus issue as mobileInput -- these are the only
   // other text inputs in the app.

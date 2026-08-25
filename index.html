@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Pokémon Gen 4 Textbox Generator</title>
 <meta name="description" content="Generate authentic, pixel-accurate Pokémon Gen 4 dialogue textboxes with 20 box styles ripped from the games.">
 <link rel="icon" href="favicon.png">
@@ -17,15 +17,15 @@
 <main class="layout">
 
   <section class="panel preview" aria-label="Preview">
-    <textarea id="mobileInput" class="mobile-text-input" aria-label="Textbox dialogue text" placeholder="Type your text here…" rows="2" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+    <textarea id="mobileInput" class="mobile-text-input" aria-label="Textbox dialogue text" placeholder="Type your text here…" rows="2" wrap="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
     <div class="preview-frame">
       <div class="canvas-wrap">
         <canvas id="canvas" width="256" height="48" tabindex="0" aria-label="Textbox preview -- click to place a cursor and type, drag to select text"></canvas>
-        <img id="previewImg" alt="Textbox preview -- tap and hold to save the image">
+        <img id="previewImg" alt="Textbox preview">
       </div>
     </div>
     <p class="preview-hint desktop-only">Click into the preview and type. Drag to select text, then use the color options below.</p>
-    <p class="preview-hint mobile-only">Type above. Select text there for the color options. Tap Save Image below to save, or tap and hold the image itself.</p>
+    <p class="preview-hint mobile-only">Type above. Select text there for the color options. Tap Save Image below — the picture opens on its own tab, ready to save.</p>
   </section>
 
   <section class="panel controls" aria-label="Controls">

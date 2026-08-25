@@ -320,25 +320,59 @@ input[type="color"] {
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
-  /* Stop long-press from sometimes starting a text selection instead of
-     offering "Save Image". touch-callout stays enabled on purpose -- that
-     callout IS the save menu. */
+  /* The native long-press callout proved unreliable -- it would sometimes
+     start a text selection instead of offering "Save Image", and then
+     swallow the gesture entirely. It's suppressed here and replaced with
+     our own long-press handler in script.js, which always downloads.
+     touch-action:manipulation also kills double-tap-to-zoom on the image. */
   user-select: none;
   -webkit-user-select: none;
-  -webkit-touch-callout: default;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 /* Hidden on desktop -- mobile gets a normal, fully native, always-visible
    text field instead of trying to type directly on the preview image. */
 .mobile-text-input {
   display: none;
+  /* The field must never re-break a line on its own: it shows exactly the
+     two lines the preview shows. These live outside the media query so
+     they apply even if it fails to match.
+
+     white-space alone is not enough on WebKit, whose UA stylesheet sets
+     `word-wrap: break-word` on textarea -- that keeps breaking long runs
+     and is the likely reason a third line still appeared on iOS. All the
+     wrapping controls are reset explicitly rather than relying on
+     `white-space: pre` to suppress them. */
+  white-space: pre;
+  overflow-wrap: normal;
+  word-wrap: normal;
+  word-break: normal;
+  -webkit-line-break: normal;
+  line-break: normal;
+  hyphens: none;
+  -webkit-hyphens: none;
 }
 
 .mobile-only { display: none; }
 
 @media (hover: none) and (pointer: coarse) {
+  /* Nothing on a touch screen should be double-tap-zoomable. */
+  html, body {
+    touch-action: manipulation;
+  }
+  /* Nothing in the preview panel is meant to be selectable -- a stray
+     long-press drag here was highlighting text and eating the gesture.
+     The text field re-enables selection for itself below. */
   .panel.preview {
     padding: 0.75rem;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .mobile-text-input {
+    user-select: text;
+    -webkit-user-select: text;
   }
   /* No padding here on mobile -- previewImg and .mobile-text-input both
      sit directly against .panel.preview's own padding, at the same
@@ -376,6 +410,14 @@ input[type="color"] {
     line-height: 1.5;
     font-family: inherit;
     resize: none;
+    /* The field must mirror the preview: exactly two lines, broken where
+       the preview breaks. Soft wrapping would re-break each line again in
+       the system font -- which is wider than our bitmap font -- turning
+       two logical lines into three or four visual ones. A long line
+       scrolls sideways instead. */
+    white-space: pre;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
   .desktop-only { display: none; }
   .mobile-only { display: block; }
