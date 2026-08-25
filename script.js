@@ -1372,7 +1372,7 @@ canvas.addEventListener("paste", (e) => {
 // natively by the browser, and we just diff its value/selection against
 // our state after the fact. The display-limit check still applies here,
 // since nothing here goes through insertAtSelection's own version of it.
-mobileInput.addEventListener("input", () => {
+if (mobileInput) mobileInput.addEventListener("input", () => {
   let newText = mobileInput.value;
   if (newText === rawText) return;
   let caret = mobileInput.selectionStart;
