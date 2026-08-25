@@ -12,33 +12,6 @@ A pixel-accurate dialogue textbox generator for **Pokémon Gen 4** (Platinum, Di
 - **The actual in-game font** — not a lookalike. Every character is stamped as a fixed grid of pixels extracted directly from Pokémon Gen 4's own font graphics (via the [pret/pokeplatinum](https://github.com/pret/pokeplatinum) decompilation project), so there's no canvas text rendering, no anti-aliasing, and no smoothing to introduce blur.
 - **One-click PNG download** of exactly what's in the preview.
 
-## Usage
-
-Open `index.html` directly (double-click it, or drag it into a browser tab), or serve it via GitHub Pages / a local server — all work, since nothing on the page depends on `fetch`. Type your two lines of dialogue, pick a box style, and click **Download PNG**.
-
-## Deploying to GitHub Pages
-
-1. Create a new GitHub repository and push this project to it.
-2. In the repo, go to **Settings → Pages**.
-3. Under **Build and deployment**, set **Source** to "Deploy from a branch", branch `main`, folder `/ (root)`.
-4. Save — GitHub will publish the site at `https://<your-username>.github.io/<repo-name>/` within a minute or two.
-
-No build step, no dependencies — it's a static site.
-
-## Project structure
-
-```
-index.html               the app
-style.css
-script.js                box data, the in-game font's pixel grid (BITMAP_FONT), rendering, download logic
-assets/
-  fonts/
-    LICENSE-FONT.txt         font source, extraction method & attribution
-  textboxes/
-    type1.png ... type20.png
-    CREDITS.txt
-```
-
 ## Licensing
 
 This repo bundles assets with different licenses/ownership than the project code:
