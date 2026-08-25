@@ -929,9 +929,12 @@ function canvasPointFromEvent(e) {
 // Finds the character index nearest a canvas-space point, for click-to-
 // place-cursor and drag-to-select. Picks the line by y, then walks that
 // line's positions left to right, landing on whichever side of each
-// glyph's midpoint the point falls on.
+// glyph's midpoint the point falls on. In tall-text mode, text is drawn
+// at 2x scale, so the clickable vertical bounds double.
 function hitTest(mx, my) {
-  const line = my < TEXT_Y + LINE_HEIGHT ? 0 : 1;
+  const tallText = tallTextToggle.checked;
+  const clickHeight = tallText ? LINE_HEIGHT * 2 : LINE_HEIGHT;
+  const line = my < TEXT_Y + clickHeight ? 0 : 1;
   let best = -1;
   for (let i = 0; i < lastPositions.length; i++) {
     const p = lastPositions[i];
@@ -1015,7 +1018,10 @@ async function render() {
   const myGeneration = ++renderGeneration;
 
   if (document.activeElement !== mobileInput && mobileInput.value !== rawText) {
-    mobileInput.value = rawText;
+    // Apply withAutoWrapNewline so the mobile field's two literal lines
+    // reflect exactly where the rendered text wraps.
+    const { text: displayText } = withAutoWrapNewline(rawText, rawText.length, tallTextToggle.checked);
+    mobileInput.value = displayText;
   }
 
   const box = BOXES[selectedIndex];
@@ -1333,6 +1339,16 @@ canvas.addEventListener("keydown", (e) => {
       const end = Math.max(selStart, selEnd);
       const selected = rawText.slice(start, end);
       navigator.clipboard.writeText(selected);
+    } else if (e.key === "x") {
+      e.preventDefault();
+      const start = Math.min(selStart, selEnd);
+      const end = Math.max(selStart, selEnd);
+      const selected = rawText.slice(start, end);
+      navigator.clipboard.writeText(selected);
+      if (start !== end) {
+        const newText = rawText.slice(0, start) + rawText.slice(end);
+        commit(newText, start, start);
+      }
     }
     return; // don't intercept other browser/OS shortcuts
   }
@@ -1456,6 +1472,20 @@ systemMessageToggle.addEventListener("change", () => {
   render();
 });
 tallTextToggle.addEventListener("change", () => {
+  // In tall-text mode, text only fits on line 1. If the current text
+  // overflows (including any line 2 content), truncate it to what fits.
+  if (tallTextToggle.checked) {
+    const positions = measure(rawText, true);
+    if (positions.some((p) => p.overflow || p.skip)) {
+      // Find the longest prefix that fits (no overflow, not skipped)
+      let fit = 0;
+      for (let i = 0; i < rawText.length; i++) {
+        if (positions[i].overflow || positions[i].skip) break;
+        fit = i + 1;
+      }
+      commit(rawText.slice(0, fit), fit, fit);
+    }
+  }
   render();
 });
 arrowToggle.addEventListener("change", () => {
